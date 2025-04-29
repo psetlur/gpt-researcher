@@ -1,7 +1,9 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import requests
+import base64
+import json
+import sys
 import os
-
 
 class CustomRetriever:
     """
@@ -26,27 +28,44 @@ class CustomRetriever:
             if key.startswith('RETRIEVER_ARG_')
         }
 
-    def search(self, max_results: int = 5) -> Optional[List[Dict[str, Any]]]:
+    def search(self, max_results: int = 5) -> List[Dict[str, Any]]:
         """
-        Performs the search using the custom retriever endpoint.
-
-        :param max_results: Maximum number of results to return (not currently used)
-        :return: JSON response in the format:
-            [
-              {
-                "url": "http://example.com/page1",
-                "raw_content": "Content of page 1"
-              },
-              {
-                "url": "http://example.com/page2",
-                "raw_content": "Content of page 2"
-              }
-            ]
+        Performs the search using the custom retriever endpoint,
+        decodes the Base64 payloads, and returns a list of dicts
+        each having 'href', 'title', and 'body'.
         """
         try:
-            response = requests.get(self.endpoint, params={**self.params, 'query': self.query})
+            response = requests.get(
+                self.endpoint,
+                params={**self.params, 'query': self.query}
+            )
             response.raise_for_status()
-            return response.json()
+
+            # Extract base64-encoded results
+            data = response.json().get("results", [])
+
+            wrapped: List[Dict[str, Any]] = []
+            for enc in data:
+                # Decode base64 and parse JSON
+                decoded = base64.b64decode(enc).decode("utf-8")
+                parsed = json.loads(decoded)
+
+                href = parsed["URL"].strip()
+                body = parsed.get("Clean-Text", "")
+                title = body.split("\n", 1)[0]
+
+                wrapped.append({
+                    "href": href,
+                    "title": title,
+                    "body": body,
+                })
+
+                if len(wrapped) >= max_results:
+                    break
+
+            return wrapped
+
         except requests.RequestException as e:
-            print(f"Failed to retrieve search results: {e}")
-            return None
+            print(f"Failed to retrieve search results: {e}", file=sys.stderr)
+            return []
+
