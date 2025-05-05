@@ -8,7 +8,7 @@ from pathlib import Path
 # Configure custom retriever
 os.environ["RETRIEVER"] = "custom"
 os.environ["RETRIEVER_ENDPOINT"] = "https://clueweb22.us/search"
-os.environ["RETRIEVER_ARG_K"] = "3"
+# os.environ["RETRIEVER_ARG_K"] = "3"
 
 from gpt_researcher import GPTResearcher
 
@@ -38,6 +38,10 @@ async def process_record(rec: dict, sem: asyncio.Semaphore):
                 report_type=REPORT_TYPE,
                 config_path=CONFIG_PATH
             )
+            print("=== active retrievers ===")
+            for cls in researcher.retrievers:
+                print(" ", cls.__name__)
+
             await researcher.conduct_research()
 
             # Ensure we have sources
@@ -47,7 +51,12 @@ async def process_record(rec: dict, sem: asyncio.Semaphore):
                 sys.exit(1)
 
             # Generate and save the report
+            print("Visited URLs:", researcher.visited_urls)
             report_md = await researcher.write_report()
+            # print("Research Sources:", researcher.research_sources)
+            # import re
+            # urls_in_report = re.findall(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+[/\w\-._~:/?#[\]@!$&\'()*+,;=.]+', report_md)
+            # print(f"URLs found in report: {urls_in_report}")
             (OUTPUT_DIR / f"{qid}.a").write_text(report_md, encoding="utf-8")
 
         except Exception as e:

@@ -265,37 +265,113 @@ class ResearchConductor:
             self.logger.error(f"Error during web search: {e}", exc_info=True)
             return []
 
+    # async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = []):
+    #     """Takes in a sub query and scrapes urls based on it and gathers context."""
+    #     if self.json_handler:
+    #         self.json_handler.log_event("sub_query", {
+    #             "query": sub_query,
+    #             "scraped_data_size": len(scraped_data)
+    #         })
+        
+    #     if self.researcher.verbose:
+    #         await stream_output(
+    #             "logs",
+    #             "running_subquery_research",
+    #             f"\n🔍 Running research for '{sub_query}'...",
+    #             self.researcher.websocket,
+    #         )
+
+    #     try:
+    #         if not scraped_data:
+    #             scraped_data = await self._scrape_data_by_urls(sub_query, query_domains)
+    #             self.logger.info(f"Scraped data size: {len(scraped_data)}")
+
+    #         content = await self.researcher.context_manager.get_similar_content_by_query(sub_query, scraped_data)
+    #         self.logger.info(f"Content found for sub-query: {len(str(content)) if content else 0} chars")
+
+    #         if not content and self.researcher.verbose:
+    #             await stream_output(
+    #                 "logs",
+    #                 "subquery_context_not_found",
+    #                 f"🤷 No content found for '{sub_query}'...",
+    #                 self.researcher.websocket,
+    #             )
+    #         if content:
+    #             if self.json_handler:
+    #                 self.json_handler.log_event("content_found", {
+    #                     "sub_query": sub_query,
+    #                     "content_size": len(content)
+    #                 })
+    #         return content
+    #     except Exception as e:
+    #         self.logger.error(f"Error processing sub-query {sub_query}: {e}", exc_info=True)
+    #         return ""
+
     async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = []):
-        """
-        Runs a sub‐query but *bypasses* the live crawler.
-        Instead, uses whatever your CustomRetriever.search() put in the 'body'
-        field and both returns that text and records those items as sources.
-        """
-        retriever_cls = self.researcher.retrievers[0]
-        retriever = retriever_cls(sub_query, query_domains=query_domains)
-
-        max_k = self.researcher.cfg.max_search_results_per_query
-        results = await asyncio.to_thread(retriever.search, max_results=max_k)
-
-        if not results:
-            return ""
-
-        # Tell GPTResearcher that these 'results' are our sources
-        self.researcher.add_research_sources(results)
-
-        bodies = [item.get("body", "") for item in results]
-        combined = " ".join(bodies)
-
+        """Takes in a sub query and scrapes urls based on it and gathers context."""
+        if self.json_handler:
+            self.json_handler.log_event("sub_query", {
+                "query": sub_query,
+                "scraped_data_size": len(scraped_data)
+            })
+        
         if self.researcher.verbose:
             await stream_output(
                 "logs",
-                "using_prefetched_text",
-                f"Using {len(results)} cached bodies for '{sub_query}'",
+                "running_subquery_research",
+                f"\n🔍 Running research for '{sub_query}'...",
                 self.researcher.websocket,
             )
 
-        return combined
+        try:
+            # If using custom retriever and no scraped data, get data from custom retriever directly
+            if os.environ.get("RETRIEVER") == "custom" and not scraped_data:
+                retriever = self.researcher.retrievers[0](sub_query, query_domains=query_domains)
+                results = await asyncio.to_thread(retriever.search, max_results=self.researcher.cfg.max_search_results_per_query)
+                
+                # Format the custom retriever results as scraped_data
+                scraped_data = []
+                for result in results:
+                    url = result.get("href")
+                    if url:
+                        self.researcher.visited_urls.add(url)
+                    # Custom retriever already provides the content in 'body'
+                    scraped_data.append({
+                        "url": url,
+                        "raw_content": result.get("body", ""),
+                        "formatted_content": result.get("body", ""),
+                        "urls": [{url}]
+                    })
+                
+                # Add results as research sources
+                if results:
+                    self.researcher.add_research_sources(results)
+                
+            elif not scraped_data:
+                # For other retrievers, scrape if no data is provided
+                scraped_data = await self._scrape_data_by_urls(sub_query, query_domains)
+                self.logger.info(f"Scraped data size: {len(scraped_data)}")
 
+            content = await self.researcher.context_manager.get_similar_content_by_query(sub_query, scraped_data)
+            self.logger.info(f"Content found for sub-query: {len(str(content)) if content else 0} chars")
+
+            if not content and self.researcher.verbose:
+                await stream_output(
+                    "logs",
+                    "subquery_context_not_found",
+                    f"🤷 No content found for '{sub_query}'...",
+                    self.researcher.websocket,
+                )
+            if content:
+                if self.json_handler:
+                    self.json_handler.log_event("content_found", {
+                        "sub_query": sub_query,
+                        "content_size": len(content)
+                    })
+            return content
+        except Exception as e:
+            self.logger.error(f"Error processing sub-query {sub_query}: {e}", exc_info=True)
+            return ""
 
     async def _process_sub_query_with_vectorstore(self, sub_query: str, filter: dict | None = None):
         """Takes in a sub query and gathers context from the user provided vector store
